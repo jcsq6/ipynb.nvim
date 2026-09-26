@@ -170,7 +170,10 @@ function M.create_shadow(state)
 
   -- Store in state
   state.shadow_buf = shadow_buf
-  state.shadow_path = shadow_path
+  -- Use the name Neovim gave the buffer: it resolves symlinks (e.g. macOS's
+  -- /var -> /private/var), and requests must use the same URI didOpen sent or
+  -- servers like ty reject them ("Document ... is not open in the session").
+  state.shadow_path = vim.api.nvim_buf_get_name(shadow_buf)
   state.shadow_lang = lang -- Track language for later use
 
   -- Attach LSP to shadow buffer
