@@ -50,7 +50,11 @@ function M.create(state, buf)
   -- The facade stays modifiable so normal-mode edits (dd, x, p, ...) work on
   -- cell content; ipynb.normal_edit validates and syncs them (or reverts edits
   -- that would break cell boundaries).
-  vim.bo[buf].buftype = '' -- Normal buffer (not scratch)
+  -- acwrite: writes must go through the BufWriteCmd that serializes .ipynb
+  -- JSON. If that autocmd can't run (e.g. a :write issued from inside another
+  -- autocmd without ++nested), Neovim errors instead of saving the raw facade
+  -- text over the notebook.
+  vim.bo[buf].buftype = 'acwrite'
   vim.bo[buf].swapfile = false
 
   -- Store state reference in buffer variable

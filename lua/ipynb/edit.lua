@@ -350,9 +350,12 @@ local function get_or_create_edit_buf(cell, lines)
   vim.b[buf].ipynb_edit_lang = lang
   set_edit_buffer_identity(buf, state and state.source_path, cell.id)
 
-  -- Setup BufWriteCmd to save the notebook when :w is used in edit buffer
+  -- Setup BufWriteCmd to save the notebook when :w is used in edit buffer.
+  -- nested: the facade :write it issues must run the facade's own BufWriteCmd
+  -- (the .ipynb serializer); without it Neovim writes the raw facade text.
   vim.api.nvim_create_autocmd('BufWriteCmd', {
     buffer = buf,
+    nested = true,
     callback = function(args)
       -- Use get_from_edit_buf since we're in the edit buffer, not facade
       local current_state = require('ipynb.state').get_from_edit_buf(args.buf)

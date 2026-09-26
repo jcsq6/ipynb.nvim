@@ -63,7 +63,23 @@ function M.read_ipynb(path)
 
   local ok, notebook = pcall(vim.json.decode, json_str)
   if not ok then
-    error('Failed to parse notebook JSON: ' .. tostring(notebook))
+    -- A notebook whose facade text was written over it (by the nested-write
+    -- bug) still holds its cells; recover them instead of failing to open.
+    local recovered = M.parse_facade_strict(content)
+    if not recovered then
+      error('Failed to parse notebook JSON: ' .. tostring(notebook))
+    end
+    vim.schedule(function()
+      vim.notify(
+        'ipynb: ' .. vim.fn.fnamemodify(path, ':t') .. ' held notebook-view text instead of JSON; '
+          .. 'recovered its cells (outputs were lost). Save to rewrite it as .ipynb.',
+        vim.log.levels.WARN
+      )
+    end)
+    notebook = { cells = {}, metadata = {} }
+    for _, cell in ipairs(recovered) do
+      table.insert(notebook.cells, { cell_type = cell.type, source = cell.source, metadata = {} })
+    end
   end
 
   -- Assign IDs against a live "already used" set so malformed notebooks with

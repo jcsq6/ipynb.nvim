@@ -45,6 +45,48 @@ h.run_test('write_from_cell_does_not_trigger_reload', function()
 end)
 
 --------------------------------------------------------------------------------
+-- Test: :w from a cell writes .ipynb JSON, not the facade text
+-- The facade :write issued from the edit buffer's BufWriteCmd didn't run the
+-- facade's BufWriteCmd (autocmds don't nest by default), so Neovim wrote the
+-- raw facade text over the notebook.
+--------------------------------------------------------------------------------
+h.run_test('write_from_cell_writes_json', function()
+  local path = temp_notebook()
+  h.open_notebook_path(path)
+
+  h.enter_cell(1)
+  h.set_edit_content('x = 1')
+  vim.api.nvim_exec_autocmds('TextChanged', { buffer = h.get_edit_buf() })
+  vim.cmd('silent write')
+  h.exit_cell()
+
+  local ok, nb = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), '\n'))
+  h.assert_true(ok and type(nb) == 'table' and nb.cells, 'Saved file should be notebook JSON')
+  h.assert_eq(table.concat(nb.cells[1].source, ''), 'x = 1')
+  vim.fn.delete(path)
+end)
+
+--------------------------------------------------------------------------------
+-- Test: a notebook overwritten with facade text opens with its cells recovered
+--------------------------------------------------------------------------------
+h.run_test('recovers_facade_text_written_over_notebook', function()
+  local path = vim.fn.tempname() .. '.ipynb'
+  vim.fn.writefile({
+    '# <<ipynb_nvim:code>>', 'a = 1', '# <</ipynb_nvim>>', '',
+    '# <<ipynb_nvim:markdown>>', '# Title', '# <</ipynb_nvim>>', '',
+  }, path)
+  local state = h.open_notebook_path(path)
+  h.assert_eq(#state.cells, 2)
+  h.assert_eq(state.cells[1].source, 'a = 1')
+  h.assert_eq(state.cells[2].type, 'markdown')
+
+  vim.cmd('silent write')
+  local ok, nb = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), '\n'))
+  h.assert_true(ok and nb.cells and #nb.cells == 2, 'Saving should rewrite it as JSON')
+  vim.fn.delete(path)
+end)
+
+--------------------------------------------------------------------------------
 -- Test: reloading a notebook changed on disk keeps its kernel
 --------------------------------------------------------------------------------
 h.run_test('reload_keeps_kernel', function()
