@@ -731,6 +731,13 @@ function M.setup_active_tracking(state)
       if current_state and current_state.cells and #current_state.cells > 0 then
         -- Full re-render on resize since border widths change
         M.render_all(current_state)
+
+        -- Output height is capped to fit the window; re-cut if that changed
+        local output_mod = require('ipynb.output')
+        if current_state._output_max_lines
+          and output_mod.max_output_lines(current_state) ~= current_state._output_max_lines then
+          output_mod.render_all(current_state)
+        end
       end
     end,
   })

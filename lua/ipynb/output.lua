@@ -266,6 +266,29 @@ function M.build_output_text(cell)
   return lines
 end
 
+---Most rows a cell's output may take in the facade
+---Neovim can only scroll through virtual lines that fit in the window: taller
+---blocks are skipped over (or jumped past) when scrolling. Outputs above this
+---are cut with a footer pointing at the output float, like images are scaled.
+---@param state NotebookState
+---@return number
+function M.max_output_lines(state)
+  local configured = (require('ipynb.config').get().output or {}).max_lines
+  if configured == false or configured == 0 then
+    return math.huge
+  end
+  if configured then
+    return configured
+  end
+  for _, win in ipairs(vim.fn.win_findbuf(state.facade_buf)) do
+    if vim.api.nvim_win_get_config(win).relative == '' then
+      -- Same budget as images: window height minus scrolloff minus 1
+      return math.max(vim.api.nvim_win_get_height(win) - vim.wo[win].scrolloff - 1, 5)
+    end
+  end
+  return math.max(vim.o.lines - 1, 5)
+end
+
 ---Render outputs for a cell as virtual lines with true text/image interleaving
 ---All outputs (text and images) are combined into a single extmark's virt_lines
 ---This guarantees correct ordering: text1 → img1 → text2 → img2 → etc.
@@ -293,12 +316,10 @@ function M.render_outputs(state, cell_idx, skip_image_render)
     images_mod.clear_images(state, cell.id)
   end
 
-  -- Build all virt_lines in order with true interleaving
-  local virt_lines = {}
+  -- Build all output rows in order with true interleaving. Each block is kept
+  -- whole when truncating: one text line, or all rows of one image.
+  local blocks = {}
   local image_index = 0
-
-  -- Output separator
-  table.insert(virt_lines, { { '┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄', 'IpynbBorder' } })
 
   for _, output in ipairs(cell.outputs) do
     local has_image = images_mod.get_image_data(output)
@@ -308,23 +329,40 @@ function M.render_outputs(state, cell_idx, skip_image_render)
       image_index = image_index + 1
       local img_lines, _ = images_mod.get_image_virt_lines(state, cell, output, image_index)
       if img_lines then
-        for _, line in ipairs(img_lines) do
-          table.insert(virt_lines, line)
-        end
+        table.insert(blocks, img_lines)
       else
         -- Fallback if image loading failed
-        table.insert(virt_lines, { { '[Image failed to load]', 'Comment' } })
+        table.insert(blocks, { { { '[Image failed to load]', 'Comment' } } })
       end
     elseif has_image and images_mod.is_available() then
       -- Terminal doesn't support placeholders, show placeholder text
-      table.insert(virt_lines, { { '[Image - placeholders not supported]', 'Comment' } })
+      table.insert(blocks, { { { '[Image - placeholders not supported]', 'Comment' } } })
     else
-      -- Add text lines to virt_lines array
-      local rendered = M.render_output(output)
-      for _, line in ipairs(rendered) do
-        table.insert(virt_lines, line)
+      for _, line in ipairs(M.render_output(output)) do
+        table.insert(blocks, { line })
       end
     end
+  end
+
+  local virt_lines = { { { '┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄', 'IpynbBorder' } } }
+  local max_lines = M.max_output_lines(state)
+  state._output_max_lines = max_lines
+  local hidden = 0
+  for i, block in ipairs(blocks) do
+    -- Leave a row for the "more lines" footer unless this is the last block
+    local room = max_lines - #virt_lines - (i < #blocks and 1 or 0)
+    if hidden > 0 or #block > room then
+      hidden = hidden + #block
+    else
+      vim.list_extend(virt_lines, block)
+    end
+  end
+  if hidden > 0 then
+    local key = require('ipynb.config').get().keymaps.open_output
+    table.insert(virt_lines, { {
+      string.format('… %d more line%s (%s to view all)', hidden, hidden == 1 and '' or 's', key or ':NotebookOutput'),
+      'IpynbBorder',
+    } })
   end
 
   -- Create single extmark with all virt_lines (text + images interleaved)

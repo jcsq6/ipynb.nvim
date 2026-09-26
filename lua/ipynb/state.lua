@@ -58,6 +58,7 @@ local M = {}
 ---@field metadata table Notebook-level metadata
 ---@field images table|nil Image objects indexed by cell.id (string)
 ---@field skip_sync boolean|nil Temporarily skip sync during undo/redo
+---@field _output_max_lines number|nil Output row cap the outputs were last rendered with
 
 -- Store all notebook states, keyed by facade buffer
 ---@type table<number, NotebookState>

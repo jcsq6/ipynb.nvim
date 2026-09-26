@@ -132,43 +132,49 @@ local function get_edit_window_geometry(parent_win, show_line_numbers)
   return 0, math.max(win_width - textoff, 1)
 end
 
----Compute the display height for the edit overlay.
----When wrap is enabled, screen rows can exceed buffer line count.
+---Rows the overlay needs to cover facade lines [first, last] (0-indexed)
+---Measured in the facade, not the overlay: the two can render the same lines
+---differently (wrapping, render-markdown's concealing and virtual lines), and
+---the overlay must never reach past the bottom of the facade window.
 ---@param edit table The edit_state table
----@param line_count number Number of lines
+---@param first number
+---@param last number
 ---@return number
-local function get_edit_window_height(edit, line_count)
-  local height = math.max(line_count, 1)
-  if not vim.api.nvim_win_is_valid(edit.win) or not vim.wo[edit.win].wrap then
-    return height
-  end
-
-  local ok, info = pcall(vim.api.nvim_win_text_height, edit.win, {
-    start_row = 0,
-    end_row = math.max(line_count - 1, 0),
+local function get_edit_window_height(edit, first, last)
+  local height = last - first + 1
+  local ok, info = pcall(vim.api.nvim_win_text_height, edit.parent_win, {
+    start_row = first,
+    end_row = last,
   })
   if ok and info and info.all then
-    return math.max(info.all, 1)
+    height = info.all
   end
 
-  return height
+  -- Clamp to the rows left below the first covered line
+  local pos = vim.fn.screenpos(edit.parent_win, first + 1, 1)
+  local wininfo = vim.fn.getwininfo(edit.parent_win)[1]
+  if pos.row > 0 and wininfo then
+    height = math.min(height, wininfo.winrow + wininfo.height - pos.row)
+  end
+  return math.max(height, 1)
 end
 
----Update edit window height and reset view
+---Facade lines of the edited cell that are fully visible in the parent window
 ---@param edit table The edit_state table
----@param line_count number Number of lines
-local function update_edit_window_height(edit, line_count)
-  if vim.api.nvim_win_is_valid(edit.win) then
-    vim.api.nvim_win_call(edit.win, function()
-      local view = vim.fn.winsaveview()
-      vim.api.nvim_win_set_height(edit.win, get_edit_window_height(edit, line_count))
-      -- Edit floats are sized to full cell content, so keep viewport anchored
-      -- to the first line. This avoids "o" from clipping the previous line
-      -- when a 1-line float grows and Neovim had scrolled topline to 2.
-      view.topline = 1
-      vim.fn.winrestview(view)
-    end)
+---@return number|nil first 0-indexed facade line
+---@return number|nil last 0-indexed facade line
+local function visible_cell_lines(edit)
+  -- nvim_win_call passes through only the first return value
+  local view = vim.api.nvim_win_call(edit.parent_win, function()
+    return { vim.fn.line('w0'), vim.fn.line('w$') }
+  end)
+  local w0, wlast = view[1], view[2]
+  local first = math.max(edit.start_line, w0 - 1)
+  local last = math.min(edit.end_line, wlast - 1)
+  if last < first then
+    return nil, nil
   end
+  return first, last
 end
 
 ---@param edit_buf number
@@ -178,6 +184,11 @@ local function edit_window_group_name(edit_buf)
 end
 
 ---Realign the edit overlay to its parent window or close it if detached.
+---The overlay covers exactly the part of the cell visible in the parent window
+---and shows the same lines, so the notebook scrolls as one: the parent owns the
+---view (and its 'scrolloff'), the overlay follows. A cell taller than the
+---window used to get an overlay taller than the window that scrolled on its
+---own, out of step with the notebook underneath.
 ---@param state NotebookState
 local function refresh_edit_window(state)
   local edit = state.edit_state
@@ -201,24 +212,49 @@ local function refresh_edit_window(state)
     return
   end
 
+  -- While typing in the overlay, move the parent's cursor along first so the
+  -- parent scrolls to keep it (and its 'scrolloff' context) in view.
+  if vim.api.nvim_get_current_win() == edit.win then
+    local cursor = vim.api.nvim_win_get_cursor(edit.win)
+    local facade_line = math.min(edit.start_line + cursor[1], vim.api.nvim_buf_line_count(state.facade_buf))
+    pcall(vim.api.nvim_win_set_cursor, edit.parent_win, { facade_line, cursor[2] })
+  end
+
+  local first, last = visible_cell_lines(edit)
+  if not first then
+    -- The cell was scrolled out of view: leave Cell mode
+    M.close(state)
+    return
+  end
+
   local config = require('ipynb.config').get()
   local float_col, float_width = get_edit_window_geometry(edit.parent_win, config.float.show_line_numbers)
-  local line_count = vim.api.nvim_buf_is_valid(edit.buf) and vim.api.nvim_buf_line_count(edit.buf) or 1
 
   sync_edit_window_chrome(edit.parent_win, edit.win, config.float.show_line_numbers)
+  -- The parent keeps the cursor in view; the overlay must never scroll itself
+  vim.wo[edit.win].scrolloff = 0
   vim.api.nvim_win_set_config(edit.win, {
     relative = 'win',
     win = edit.parent_win,
-    bufpos = { edit.start_line, 0 },
+    bufpos = { first, 0 },
     row = 0,
     col = float_col,
     width = float_width,
-    height = math.max(line_count, 1),
+    height = 1,
     anchor = 'NW',
     border = 'none',
     zindex = EDIT_ZINDEX,
   })
-  update_edit_window_height(edit, line_count)
+  local first_row = first - edit.start_line
+  vim.api.nvim_win_set_height(edit.win, get_edit_window_height(edit, first, last))
+  vim.api.nvim_win_call(edit.win, function()
+    local view = vim.fn.winsaveview()
+    if view.topline ~= first_row + 1 or view.topfill ~= 0 then
+      view.topline = first_row + 1
+      view.topfill = 0
+      vim.fn.winrestview(view)
+    end
+  end)
 end
 
 ---Get or create edit buffer for a cell
@@ -507,6 +543,7 @@ function M.open(state, mode)
 
   -- Position cursor and enter appropriate mode
   vim.api.nvim_win_set_cursor(state.edit_state.win, { relative_line, target_col })
+  refresh_edit_window(state)
 
   if mode == 'i' then
     -- insert at cursor
@@ -552,7 +589,9 @@ function M.setup_sync(state, buf)
 
   --- Helper to sync facade and update visuals
   --- Called from InsertLeave and TextChanged; facade is modifiable during edit session
-  local function sync_facade()
+  ---@param force_visuals boolean|nil Re-render visuals even if the line count
+  ---  looks unchanged (TextChangedI already synced the new count while typing)
+  local function sync_facade(force_visuals)
     if not vim.api.nvim_buf_is_valid(state.facade_buf) then
       return
     end
@@ -576,7 +615,7 @@ function M.setup_sync(state, buf)
     refresh_edit_window(state)
 
     -- Refresh markers and visuals if line count changed
-    if line_count_changed then
+    if line_count_changed or force_visuals then
       require('ipynb.cells').place_markers(state)
       require('ipynb.visuals').render_all(state)
 
@@ -654,7 +693,8 @@ function M.setup_sync(state, buf)
       -- Reset flag so next insert session gets fresh undo entry
       edit.insert_synced = false
       if had_changes then
-        sync_facade()
+        -- Lines added while typing were synced without redrawing the borders
+        sync_facade(true)
         -- Force undo break on facade so next insert session creates a new undo block
         vim.api.nvim_buf_call(state.facade_buf, function()
           vim.cmd('let &undolevels = &undolevels')
@@ -727,16 +767,9 @@ function M.setup_cursor_sync(state)
           return
         end
 
-        -- Get cursor position in edit buffer (1-indexed)
-        local edit_cursor = vim.api.nvim_win_get_cursor(current_edit.win)
-        local edit_line = edit_cursor[1]
-        local edit_col = edit_cursor[2]
-
-        -- Translate to facade position
-        local facade_line = current_edit.start_line + edit_line -- start_line is 0-indexed, edit_line is 1-indexed
-
-        -- Update facade cursor without changing focus
-        vim.api.nvim_win_set_cursor(current_edit.parent_win, { facade_line, edit_col })
+        -- Moves the facade cursor to match, lets the facade scroll to it, and
+        -- realigns the overlay with the facade's new view
+        refresh_edit_window(state)
       end)
     end,
   })
@@ -780,6 +813,55 @@ function M.setup_window_sync(state)
     callback = refresh_or_close,
   })
 
+  -- The notebook scrolled under the overlay (mouse wheel over it, or a scroll
+  -- driven from the overlay): follow it, or leave Cell mode if the cell left
+  -- the screen
+  vim.api.nvim_create_autocmd('WinScrolled', {
+    group = group,
+    callback = function()
+      local current = state.edit_state
+      if current and current.buf == edit_buf and vim.v.event[tostring(current.parent_win)] then
+        refresh_or_close()
+      end
+    end,
+  })
+end
+
+---Scroll the notebook from the edit overlay
+---The overlay only mirrors the part of the cell visible in the notebook, so
+---scroll commands run in the notebook window. If they move the cursor out of
+---the cell, Cell mode ends there, as when scrolling in any other window
+---moves the cursor.
+---@param state NotebookState
+---@param keys string Normal-mode scroll command, e.g. "3<C-e>" or "zz"
+function M.scroll_notebook(state, keys)
+  local edit = state.edit_state
+  if not edit or not vim.api.nvim_win_is_valid(edit.parent_win) or not vim.api.nvim_win_is_valid(edit.win) then
+    return
+  end
+  refresh_edit_window(state) -- parent cursor matches the overlay's
+
+  vim.api.nvim_win_call(edit.parent_win, function()
+    vim.cmd('normal! ' .. vim.api.nvim_replace_termcodes(keys, true, false, true))
+  end)
+
+  edit = state.edit_state
+  if not edit then
+    return
+  end
+  local cursor = vim.api.nvim_win_get_cursor(edit.parent_win)
+  local line = cursor[1] - 1
+  if line >= edit.start_line and line <= edit.end_line then
+    local text = vim.api.nvim_buf_get_lines(edit.buf, line - edit.start_line, line - edit.start_line + 1, false)[1] or ''
+    vim.api.nvim_win_set_cursor(edit.win, { line - edit.start_line + 1, math.min(cursor[2], #text) })
+    refresh_edit_window(state)
+  else
+    if vim.fn.mode():match('^[iR]') then
+      vim.cmd('stopinsert')
+    end
+    M.close(state)
+    pcall(vim.api.nvim_win_set_cursor, edit.parent_win, cursor)
+  end
 end
 
 ---Setup keymaps for edit float
@@ -952,6 +1034,34 @@ function M.setup_edit_keymaps(state)
   vim.keymap.set('n', km.toggle_auto_hover, function()
     require('ipynb.inspector').toggle_auto_hover()
   end, vim.tbl_extend('force', opts, { desc = 'Inspect auto-hover toggle' }))
+
+  -- Scrolling moves the notebook; the overlay follows it (see scroll_notebook)
+  for _, key in ipairs({ '<C-e>', '<C-y>', '<C-d>', '<C-u>', '<C-f>', '<C-b>', 'zz', 'zt', 'zb' }) do
+    vim.keymap.set('n', key, function()
+      local count = vim.v.count > 0 and tostring(vim.v.count) or ''
+      M.scroll_notebook(state, count .. key)
+    end, vim.tbl_extend('force', opts, { desc = 'Scroll notebook' }))
+  end
+
+  -- The wheel scrolls the window under the pointer, but mappings resolve
+  -- against the focused buffer: take it over only when the pointer is on the
+  -- overlay or the notebook behind it.
+  local wheel_step = tonumber(vim.o.mousescroll:match('ver:(%d+)')) or 3
+  for key, scroll in pairs({ ['<ScrollWheelDown>'] = '<C-e>', ['<ScrollWheelUp>'] = '<C-y>' }) do
+    vim.keymap.set({ 'n', 'i' }, key, function()
+      local edit = state.edit_state
+      local mouse_win = vim.fn.getmousepos().winid
+      if not edit or (mouse_win ~= edit.win and mouse_win ~= edit.parent_win) then
+        return key
+      end
+      if wheel_step > 0 then
+        vim.schedule(function()
+          M.scroll_notebook(state, wheel_step .. scroll)
+        end)
+      end
+      return ''
+    end, vim.tbl_extend('force', opts, { expr = true, desc = 'Scroll notebook' }))
+  end
 
   -- Setup auto-hover on CursorHold for edit buffer
   require('ipynb.inspector').setup_auto_hover(state, buf)

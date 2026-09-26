@@ -13,6 +13,7 @@ local M = {}
 ---@field folding FoldingConfig
 ---@field format FormatConfig
 ---@field shadow ShadowConfig
+---@field output OutputConfig
 
 ---@class FloatConfig
 ---@field width number Window width as fraction of screen (0-1) - used for centered mode
@@ -97,6 +98,9 @@ local M = {}
 ---@field max_width number|nil Maximum image width in terminal columns (nil = window width minus sign/number columns)
 ---@field max_height number|nil Maximum image height in terminal rows (nil = window height minus scrolloff minus 1)
 
+---@class OutputConfig
+---@field max_lines number|false|nil Most rows of output shown under a cell; longer output ends in a "… N more lines" footer (nil = window height minus scrolloff minus 1, false = no limit)
+
 ---@class InspectorConfig
 ---@field close string|string[] Keys to close inspector window (default: {'q', '<Esc>'})
 ---@field inspect string|string[] Keys to inspect variable under cursor (default: {'K', '<CR>'})
@@ -180,6 +184,12 @@ M.defaults = {
 		cache_dir = vim.fn.stdpath("cache") .. "/ipynb.nvim",
 		max_width = nil, -- nil = window width minus sign/number columns
 		max_height = nil, -- nil = window height minus scrolloff minus 1
+	},
+	output = {
+		-- Taller output can't be scrolled through (Neovim skips virtual lines
+		-- that don't fit in the window), so it is cut with a footer; open the
+		-- full output with keymaps.open_output. false = never cut.
+		max_lines = nil, -- nil = window height minus scrolloff minus 1
 	},
 	inspector = {
 		close = { "q", "<Esc>" }, -- Keys to close inspector window

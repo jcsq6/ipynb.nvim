@@ -86,6 +86,8 @@ The treesitter parser is automatically compiled on first load.
 - Place your cursor anywhere on a cell (you can quickly navigate using `]]` (next) and `[[` (previous), though any vim motions will work)
 - Press `i` (Insert) or `<CR>` (Normal) to enter Cell mode for the current cell
 - Press `<Esc>` to exit Cell mode and return to Notebook mode
+- Normal-mode edits also work directly in Notebook mode: `dd`, `x`, `p`, `cw`, `.` and friends change the cell under the cursor (on a cell's border, `dd`/`p`/`P` cut and paste whole cells instead). Edits that would break a cell's boundaries are undone.
+- Scrolling in Cell mode (`<C-e>`, `<C-d>`, `zz`, the mouse wheel, ...) scrolls the notebook; scrolling the cell out of view returns to Notebook mode
 
 ### 3. Start a kernel
 
@@ -296,6 +298,12 @@ require("ipynb").setup({
     cache_dir = vim.fn.stdpath("cache") .. "/ipynb.nvim",
     max_width = nil,   -- nil = window width minus sign/number columns
     max_height = nil,  -- nil = window height minus scrolloff minus 1
+  },
+  output = {
+    -- Outputs render as virtual lines, which Neovim can't scroll through when
+    -- they're taller than the window, so longer output is cut with a
+    -- "… N more lines" footer (open it all with <leader>ko)
+    max_lines = nil,   -- nil = window height minus scrolloff minus 1, false = never cut
   },
   inspector = {
     -- Keymaps while in cell variable inspector float window
