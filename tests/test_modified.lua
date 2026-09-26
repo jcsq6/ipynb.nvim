@@ -40,7 +40,6 @@ h.run_test('no_modified_on_enter_exit', function()
   h.exit_cell()
 
   -- Should not be modified
-  -- Note: facade is non-modifiable, so check edit buffer behavior instead
   h.assert_false(h.is_in_edit_float(), 'Should have exited edit float')
 end)
 

@@ -288,11 +288,9 @@ function M.undo()
 		require("ipynb.edit").global_undo(state)
 	else
 		-- In facade, use regular undo
-		vim.bo[state.facade_buf].modifiable = true
 		vim.api.nvim_buf_call(state.facade_buf, function()
 			vim.cmd("silent! undo")
 		end)
-		vim.bo[state.facade_buf].modifiable = false
 
 		-- Sync state after undo
 		local cells_mod = require("ipynb.cells")
@@ -309,11 +307,9 @@ function M.redo()
 	if state and state.edit_state then
 		require("ipynb.edit").global_redo(state)
 	else
-		vim.bo[state.facade_buf].modifiable = true
 		vim.api.nvim_buf_call(state.facade_buf, function()
 			vim.cmd("silent! redo")
 		end)
-		vim.bo[state.facade_buf].modifiable = false
 
 		local cells_mod = require("ipynb.cells")
 		cells_mod.sync_cells_from_facade(state)

@@ -227,9 +227,9 @@ require("ipynb").setup({
     -- Navigation (both Notebook mode and Cell mode)
     jump_to_cell = "<leader>kj",   -- open cell picker
     -- Cell operations (Notebook mode)
-    cut_cell = "dd",               -- cut cell to register
-    paste_cell_below = "p",        -- paste cell below
-    paste_cell_above = "P",        -- paste cell above
+    cut_cell = "dd",               -- cut cell to register (on a cell border; plain dd on content)
+    paste_cell_below = "p",        -- paste cell below (on a cell border; plain p on content)
+    paste_cell_above = "P",        -- paste cell above (on a cell border; plain P on content)
     move_cell_down = "<M-j>",      -- move cell down
     move_cell_up = "<M-k>",        -- move cell up
     -- Cell operations (both Notebook mode and Cell mode)

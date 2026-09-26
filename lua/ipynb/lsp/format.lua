@@ -172,7 +172,7 @@ local function handle_range_format(ctx, method, params, handler, client, _req_bu
           M.apply_edits_to_lines(lines, translated)
 
           -- Check if edit session is still active (user might have closed float during format)
-          -- If not active, skip sync since facade is non-modifiable
+          -- If not active, skip sync; the facade is updated below
           if not state.edit_state or state.edit_state.buf ~= edit_buf then
             state.skip_sync = true
           end
@@ -238,9 +238,7 @@ local function handle_range_format(ctx, method, params, handler, client, _req_bu
         if orig_handler then orig_handler(nil, {}) end
         return
       end
-      vim.bo[state.facade_buf].modifiable = true
       pcall(vim.lsp.util.apply_text_edits, result, state.facade_buf, 'utf-16')
-      vim.bo[state.facade_buf].modifiable = false
 
       -- Sync changes
       cells_mod.sync_cells_from_facade(state)
@@ -386,13 +384,7 @@ function M.format_cell(state, cell_idx, callback)
         shadow.sync_shadow_region(state, current_start, current_end + 1, new_lines, cell.type)
 
         -- Update facade buffer (pcall to suppress LSP change tracking errors)
-        -- Keep modifiable if edit session is active (edit.lua:281 keeps it modifiable during editing)
-        local in_edit_session = state.edit_state ~= nil
-        vim.bo[state.facade_buf].modifiable = true
         pcall(vim.api.nvim_buf_set_lines, state.facade_buf, current_start, current_end + 1, false, new_lines)
-        if not in_edit_session then
-          vim.bo[state.facade_buf].modifiable = false
-        end
 
         -- Update edit buffer if it exists and is valid (for when formatting from edit float)
         -- Skip sync since we already updated facade above

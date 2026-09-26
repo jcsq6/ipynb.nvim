@@ -294,6 +294,41 @@ function M.jupytext_to_cells(lines)
   return cells
 end
 
+---Parse facade lines, rejecting anything that isn't a well-formed cell layout
+---Unlike jupytext_to_cells, which is lenient, this returns nil when a start
+---marker is missing its end marker (or vice versa), or when non-blank text sits
+---outside a cell. Used to tell edits inside cells from edits that broke the
+---cell boundaries.
+---@param lines string[]
+---@return Cell[]|nil
+function M.parse_facade_strict(lines)
+  local in_cell = false
+  for _, line in ipairs(lines) do
+    if line:match('^# <<ipynb_nvim:(%w+)>>$') then
+      if in_cell then
+        return nil
+      end
+      in_cell = true
+    elseif line:match('^# <</ipynb_nvim>>$') then
+      if not in_cell then
+        return nil
+      end
+      in_cell = false
+    elseif not in_cell and line:match('%S') then
+      return nil
+    end
+  end
+  if in_cell then
+    return nil
+  end
+
+  local cells = M.jupytext_to_cells(lines)
+  if #cells == 0 then
+    return nil
+  end
+  return cells
+end
+
 ---Open a notebook file (or create new if doesn't exist)
 ---@param buf number Buffer to populate
 ---@param path string Path to .ipynb file

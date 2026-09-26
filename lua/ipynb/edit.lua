@@ -453,9 +453,6 @@ function M.open(state, mode)
   local visuals = require('ipynb.visuals')
   visuals.render_all(state)
 
-  -- Keep facade modifiable during edit session (avoids undo chain breaks from toggling)
-  vim.bo[state.facade_buf].modifiable = true
-
   -- Setup real-time sync (once per buffer to preserve undo tracking state)
   if not vim.b[buf].notebook_sync_attached then
     M.setup_sync(state, buf)
@@ -977,25 +974,26 @@ local function global_undo_redo(state, cmd)
   end)
 
   -- Perform undo/redo on facade buffer
-  -- Facade is kept modifiable during edit session (open/close handle that)
-  local was_modifiable = vim.bo[state.facade_buf].modifiable
-  if not was_modifiable then
-    vim.bo[state.facade_buf].modifiable = true
-  end
-
   vim.api.nvim_buf_call(state.facade_buf, function()
     vim.cmd('silent! ' .. cmd)
   end)
-
-  if not was_modifiable then
-    vim.bo[state.facade_buf].modifiable = false
-  end
 
   -- Check if undo/redo actually changed anything
   local seq_after = vim.api.nvim_buf_call(state.facade_buf, function()
     return vim.fn.undotree().seq_cur
   end)
   if seq_before == seq_after then
+    return
+  end
+
+  -- Never land on a state with broken cell boundaries (e.g. the redo branch
+  -- left behind when a rejected normal-mode edit was undone)
+  local lines = vim.api.nvim_buf_get_lines(state.facade_buf, 0, -1, false)
+  if not require('ipynb.io').parse_facade_strict(lines) then
+    vim.api.nvim_buf_call(state.facade_buf, function()
+      vim.cmd('silent! ' .. (cmd == 'undo' and 'redo' or 'undo'))
+    end)
+    vim.notify('ipynb: nothing to ' .. cmd, vim.log.levels.INFO)
     return
   end
 
@@ -1107,11 +1105,6 @@ function M.close(state)
   -- Close window (buffer persists due to bufhidden='hide')
   if vim.api.nvim_win_is_valid(edit.win) then
     vim.api.nvim_win_close(edit.win, true)
-  end
-
-  -- Restore facade to non-modifiable
-  if facade_valid then
-    vim.bo[state.facade_buf].modifiable = false
   end
 
   state.edit_state = nil

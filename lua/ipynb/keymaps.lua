@@ -18,6 +18,36 @@ local function get_cell_at_cursor(state)
   return cells_mod.get_cell_at_line(state, cursor_line)
 end
 
+---Whether the cursor is on a cell's content (not its borders or a separator)
+---@param state NotebookState
+---@return boolean
+local function cursor_on_content(state)
+  local cells_mod = require('ipynb.cells')
+  local line = vim.api.nvim_win_get_cursor(0)[1] - 1
+  local cell_idx = cells_mod.get_cell_at_line(state, line)
+  if not cell_idx then
+    return false
+  end
+  local content_start, content_end = cells_mod.get_content_range(state, cell_idx)
+  return content_start ~= nil and line >= content_start and line <= content_end
+end
+
+---Map a key to a cell operation on cell borders, and to its plain Vim meaning
+---on cell content (so dd/p/P still edit text inside a cell)
+---@param state NotebookState
+---@param key string
+---@param cell_op function
+---@param opts table
+local function set_border_keymap(state, key, cell_op, opts)
+  vim.keymap.set('n', key, function()
+    if cursor_on_content(state) then
+      return key
+    end
+    vim.schedule(cell_op)
+    return ''
+  end, vim.tbl_extend('force', opts, { expr = true }))
+end
+
 ---Move cursor to the content area of a cell
 ---@param state NotebookState
 ---@param cell_idx number
@@ -113,7 +143,7 @@ function M.setup_facade_keymaps(state)
     require('ipynb.cells').goto_prev_cell(state)
   end, vim.tbl_extend('force', opts, { desc = 'Previous cell' }))
 
-  -- Enter edit mode - hardcoded keys (these are blocked by modifiable=false anyway)
+  -- Enter edit mode - hardcoded keys (insert happens in the edit float, not the facade)
   vim.keymap.set('n', '<CR>', function()
     require('ipynb.edit').open(state)
   end, vim.tbl_extend('force', opts, { desc = 'Edit cell (normal mode)' }))
@@ -142,18 +172,18 @@ function M.setup_facade_keymaps(state)
     require('ipynb.edit').open(state, 'O')
   end, vim.tbl_extend('force', opts, { desc = 'Edit cell (open line above)' }))
 
-  -- Cell cut/paste
-  vim.keymap.set('n', km.cut_cell, function()
+  -- Cell cut/paste on a cell's border lines; plain dd/p/P on its content
+  set_border_keymap(state, km.cut_cell, function()
     M.cut_cell(state)
-  end, vim.tbl_extend('force', opts, { desc = 'Cell cut' }))
+  end, vim.tbl_extend('force', opts, { desc = 'Cell cut (on border)' }))
 
-  vim.keymap.set('n', km.paste_cell_below, function()
+  set_border_keymap(state, km.paste_cell_below, function()
     M.paste_cell(state, 'below')
-  end, vim.tbl_extend('force', opts, { desc = 'Cell paste below' }))
+  end, vim.tbl_extend('force', opts, { desc = 'Cell paste below (on border)' }))
 
-  vim.keymap.set('n', km.paste_cell_above, function()
+  set_border_keymap(state, km.paste_cell_above, function()
     M.paste_cell(state, 'above')
-  end, vim.tbl_extend('force', opts, { desc = 'Cell paste above' }))
+  end, vim.tbl_extend('force', opts, { desc = 'Cell paste above (on border)' }))
 
   -- Cell movement
   vim.keymap.set('n', km.move_cell_down, function()
@@ -281,15 +311,8 @@ function M.setup_facade_keymaps(state)
   -- Formatting: vim.lsp.buf.format() is wrapped to work with notebooks (see lsp.lua)
   -- User's existing LSP keymaps (gd, gr, K, etc.) work automatically
 
-  -- Catch any insert mode attempts (modifiable=false handles the rest)
-  vim.api.nvim_create_autocmd('InsertEnter', {
-    buffer = buf,
-    callback = function()
-      vim.cmd('stopinsert')
-      vim.notify('Press i, a, o, or <CR> to edit cell', vim.log.levels.INFO)
-    end,
-    desc = 'Prevent insert mode in notebook facade',
-  })
+  -- Validate and sync edits made directly on the facade (dd, x, p, cw, ...)
+  require('ipynb.normal_edit').setup(state)
 
   -- Register with which-key for discoverability (if available)
   register_which_key()

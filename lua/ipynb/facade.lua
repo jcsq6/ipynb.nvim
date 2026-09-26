@@ -47,9 +47,9 @@ function M.create(state, buf)
   -- NOTE: filetype is NOT python - we don't want LSP to attach to facade
   -- LSP attaches to shadow buffer instead
   vim.bo[buf].filetype = 'ipynb' -- Custom filetype, no LSP
-  vim.bo[buf].modifiable = false -- User can't directly edit
-  -- Don't set readonly - it causes warnings on :w even with BufWriteCmd handler
-  -- modifiable=false is sufficient to prevent edits
+  -- The facade stays modifiable so normal-mode edits (dd, x, p, ...) work on
+  -- cell content; ipynb.normal_edit validates and syncs them (or reverts edits
+  -- that would break cell boundaries).
   vim.bo[buf].buftype = '' -- Normal buffer (not scratch)
   vim.bo[buf].swapfile = false
 
@@ -133,12 +133,7 @@ function M.refresh(state)
   local io_mod = require('ipynb.io')
   local lines = io_mod.cells_to_jupytext(state.cells)
 
-  vim.bo[buf].modifiable = true
   set_facade_lines(buf, 0, -1, lines)
-  -- Only lock facade if not in edit buffer
-  if not state.edit_state then
-    vim.bo[buf].modifiable = false
-  end
 
   -- Refresh shadow buffer for LSP
   local lsp_mod = require('ipynb.lsp')

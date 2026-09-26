@@ -98,7 +98,6 @@ function M.apply_workspace_edit(state, workspace_edit, is_edit_buf)
   end)
 
   -- Apply each edit individually to preserve extmarks on unaffected lines
-  vim.bo[state.facade_buf].modifiable = true
   for _, edit in ipairs(edits) do
     local start_line = edit.range.start.line
     local end_line = edit.range['end'].line
@@ -129,7 +128,6 @@ function M.apply_workspace_edit(state, workspace_edit, is_edit_buf)
       pcall(vim.api.nvim_buf_set_lines, state.facade_buf, start_line, end_line + 1, false, replacement)
     end
   end
-  vim.bo[state.facade_buf].modifiable = false
 
   -- Sync cell sources from facade
   cells_mod.sync_cells_from_facade(state)
