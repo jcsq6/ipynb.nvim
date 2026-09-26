@@ -32,20 +32,55 @@ local function cursor_on_content(state)
   return content_start ~= nil and line >= content_start and line <= content_end
 end
 
----Map a key to a cell operation on cell borders, and to its plain Vim meaning
----on cell content (so dd/p/P still edit text inside a cell)
+---Point a buffer-local <Plug> target at whatever key does outside the notebook:
+---the user's global mapping if there is one (e.g. vim-cutlass's dd -> "_dd, a
+---yank-ring plugin's p), otherwise the built-in command. Looked up on every
+---press so mappings from lazy-loaded plugins are picked up.
+---@param buf number
+---@param key string
+---@param plug string
+local function set_fallback_target(buf, key, plug)
+  local raw = vim.keycode(key)
+  local fallback
+  for _, map in ipairs(vim.api.nvim_get_keymap('n')) do
+    if map.lhsraw == raw then
+      fallback = map
+      break
+    end
+  end
+
+  if not fallback then
+    vim.keymap.set('n', plug, key, { buffer = buf })
+    return
+  end
+  local expr = fallback.expr == 1
+  vim.keymap.set('n', plug, fallback.callback or fallback.rhs, {
+    buffer = buf,
+    expr = expr,
+    remap = fallback.noremap == 0,
+    silent = fallback.silent == 1,
+    replace_keycodes = expr and fallback.replace_keycodes == 1 or nil,
+  })
+end
+
+---Map a key to a cell operation on cell borders, and to its usual meaning on
+---cell content (so dd/p/P still edit text inside a cell, honoring the user's
+---own mappings for those keys)
 ---@param state NotebookState
 ---@param key string
 ---@param cell_op function
 ---@param opts table
 local function set_border_keymap(state, key, cell_op, opts)
+  local plug = '<Plug>(ipynb-content-' .. key .. ')'
   vim.keymap.set('n', key, function()
     if cursor_on_content(state) then
-      return key
+      -- Returned as typeahead, so a count, register and . repeat still apply
+      set_fallback_target(state.facade_buf, key, plug)
+      return plug
     end
     vim.schedule(cell_op)
     return ''
-  end, vim.tbl_extend('force', opts, { expr = true }))
+  end, vim.tbl_extend('force', opts, { expr = true, remap = true }))
 end
 
 ---Move cursor to the content area of a cell

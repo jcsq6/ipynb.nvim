@@ -193,5 +193,49 @@ h.run_test('outputs_survive_normal_mode_edit', function()
   h.assert_eq(#state.cells[2].outputs, 1, 'Outputs should be kept')
 end)
 
+h.run_test('register_and_count_apply_to_paste_in_cell', function()
+  h.open_notebook('three_cells.ipynb')
+  vim.fn.setreg('a', 'z', 'v')
+  goto_cell_line(1, 2)
+  normal('"a2p')
+  assert_same(sources()[1], '# Cell 1\nazz = 1')
+end)
+
+-- The user's own mappings for dd/p/P (vim-cutlass, yank-ring plugins, ...)
+-- must still run on cell content instead of the built-in commands
+h.run_test('user_mappings_for_dd_and_p_apply_in_cell', function()
+  local put_calls = 0
+  vim.keymap.set('n', 'dd', '"_dd') -- what vim-cutlass maps
+  vim.keymap.set('n', 'p', function()
+    put_calls = put_calls + 1
+    return 'p'
+  end, { expr = true })
+
+  local ok, err = pcall(function()
+    h.open_notebook('three_cells.ipynb')
+    vim.fn.setreg('"', 'KEEP', 'v')
+    goto_cell_line(2, 2)
+    normal('dd')
+    assert_same(sources()[2], '# Cell 2', 'dd should delete the line')
+    h.assert_eq(vim.fn.getreg('"'), 'KEEP', 'dd should go through the user mapping (black hole register)')
+
+    goto_cell_line(1, 2)
+    normal('p')
+    h.assert_eq(put_calls, 1, 'p should go through the user mapping')
+    assert_same(sources()[1], '# Cell 1\naKEEP = 1')
+
+    -- Borders still cut the cell
+    goto_cell_line(3, 0)
+    normal('dd')
+    h.assert_eq(#h.get_state().cells, 2, 'dd on a border should still cut the cell')
+  end)
+
+  vim.keymap.del('n', 'dd')
+  vim.keymap.del('n', 'p')
+  if not ok then
+    error(err, 0)
+  end
+end)
+
 local success = h.summary()
 vim.cmd(success and 'qa!' or 'cq!')
