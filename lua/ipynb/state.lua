@@ -63,6 +63,11 @@ local M = {}
 ---@type table<number, NotebookState>
 M.notebooks = {}
 
+-- States of facade buffers that were just unloaded while a kernel was attached,
+-- kept until the next event loop tick so a reload can reclaim the kernel
+---@type table<number, NotebookState>
+M.unloaded = {}
+
 -- Word lists for human-readable cell IDs (JEP 62 Option D)
 local words = require('ipynb.words')
 

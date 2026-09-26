@@ -36,6 +36,9 @@ class KernelBridge:
         self.kernel_language: Optional[str] = None
         self.execution_count: int = 0
         self.pending_executions: Dict[str, Dict[str, Any]] = {}
+        # Held while sending an execute request and recording its msg_id, so the
+        # iopub/stdin threads can't look up a reply before it is registered.
+        self.executions_lock = threading.Lock()
         self.iopub_thread: Optional[threading.Thread] = None
         self.stdin_thread: Optional[threading.Thread] = None
         self.pending_input_requests: Dict[str, Dict[str, Any]] = {}
@@ -48,6 +51,17 @@ class KernelBridge:
 
     def start_kernel(self, kernel_name: str = "python3") -> bool:
         """Start a new Jupyter kernel."""
+        if self.kernel_client:
+            # A second start (e.g. the start key pressed again while the first
+            # kernel was still booting) would silently swap in a fresh kernel
+            # and lose all state. Re-announce the running kernel instead.
+            self.send_message({
+                "type": "kernel_started",
+                "kernel_name": self.kernel_name,
+                "kernel_id": getattr(self.kernel_manager, "kernel_id", None) or "unknown",
+                "language": self.kernel_language
+            })
+            return True
         try:
             self.kernel_name = kernel_name
             self.kernel_manager = jupyter_client.KernelManager(kernel_name=kernel_name)
@@ -86,6 +100,12 @@ class KernelBridge:
 
     def connect_to_kernel(self, connection_file: str) -> bool:
         """Connect to an existing kernel via connection file."""
+        if self.kernel_client:
+            self.send_message({
+                "type": "error",
+                "error": "Already connected to a kernel; shut it down first"
+            })
+            return False
         try:
             self.kernel_manager = jupyter_client.KernelManager(connection_file=connection_file)
             self.kernel_manager.load_connection_file()
@@ -171,7 +191,8 @@ class KernelBridge:
         msg_id = parent_header.get("msg_id", "")
 
         # Find the cell this message belongs to
-        exec_info = self.pending_executions.get(msg_id, {})
+        with self.executions_lock:
+            exec_info = self.pending_executions.get(msg_id, {})
         cell_id = exec_info.get("cell_id")
 
         if msg_type == "status":
@@ -183,7 +204,8 @@ class KernelBridge:
             })
             if execution_state == "idle":
                 # Execution is complete, drop tracking to prevent unbounded growth.
-                self.pending_executions.pop(msg_id, None)
+                with self.executions_lock:
+                    self.pending_executions.pop(msg_id, None)
                 self._clear_input_requests_for_msg(msg_id)
 
         elif msg_type == "stream":
@@ -249,7 +271,8 @@ class KernelBridge:
         parent_header = msg.get("parent_header", {})
         parent_msg_id = parent_header.get("msg_id", "")
 
-        exec_info = self.pending_executions.get(parent_msg_id, {})
+        with self.executions_lock:
+            exec_info = self.pending_executions.get(parent_msg_id, {})
         cell_id = exec_info.get("cell_id")
 
         request_id = uuid.uuid4().hex
@@ -282,12 +305,13 @@ class KernelBridge:
             return None
 
         try:
-            msg_id = self.kernel_client.execute(code, user_expressions=user_expressions or {})
-            self.pending_executions[msg_id] = {
-                "cell_id": cell_id,
-                "code": code,
-                "has_user_expressions": bool(user_expressions)
-            }
+            with self.executions_lock:
+                msg_id = self.kernel_client.execute(code, user_expressions=user_expressions or {})
+                self.pending_executions[msg_id] = {
+                    "cell_id": cell_id,
+                    "code": code,
+                    "has_user_expressions": bool(user_expressions)
+                }
             self.send_message({
                 "type": "execute_request",
                 "cell_id": cell_id,

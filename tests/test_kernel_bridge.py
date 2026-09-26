@@ -465,6 +465,46 @@ def test_restart():
         bridge.stop()
 
 
+def test_second_start_keeps_kernel():
+    """Test that a repeated start request reuses the running kernel."""
+    bridge = KernelBridgeTest()
+    try:
+        bridge.start()
+        bridge.read_message()  # consume ready
+
+        bridge.send({"action": "start", "kernel_name": "python3"})
+        first = bridge.wait_for_message("kernel_started", timeout=30)
+        assert first is not None, "Kernel did not start"
+
+        bridge.send({"action": "execute", "code": "kept = 41", "cell_id": "cell-0"})
+        bridge.wait_for_message("status", timeout=10)
+
+        # Pressing "start" again must not replace the kernel (and its namespace)
+        bridge.send({"action": "start", "kernel_name": "python3"})
+        second = bridge.wait_for_message("kernel_started", timeout=30)
+        assert second is not None, "Second start got no reply"
+        assert second["kernel_id"] == first["kernel_id"], "Second start replaced the kernel"
+
+        bridge.send({"action": "execute", "code": "print(kept + 1)", "cell_id": "cell-1"})
+        messages = []
+        while True:
+            msg = bridge.read_message(timeout=10)
+            if msg is None:
+                break
+            messages.append(msg)
+            if msg.get("type") == "status" and msg.get("state") == "idle" and msg.get("cell_id") == "cell-1":
+                break
+
+        output = next((m for m in messages if m["type"] == "output"), None)
+        assert output is not None, f"No output after second start: {messages}"
+        assert output["cell_id"] == "cell-1", "Output was not routed to its cell"
+        assert output["output"].get("text", "").strip() == "42", f"Namespace was lost: {output}"
+
+        print("PASS: Second start keeps the running kernel")
+    finally:
+        bridge.stop()
+
+
 def run_all_tests():
     """Run all tests."""
     tests = [
@@ -478,6 +518,7 @@ def run_all_tests():
         test_stdin_input_request_reply,
         test_interrupt,
         test_restart,
+        test_second_start_keeps_kernel,
     ]
 
     print("=" * 60)

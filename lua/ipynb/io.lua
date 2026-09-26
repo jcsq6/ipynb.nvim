@@ -316,6 +316,26 @@ function M.open_notebook(buf, path)
   state.metadata = metadata
   state.cell_ids = cell_ids
 
+  -- Reloading a notebook that is already open (:e!, or 'autoread' after the
+  -- file changed on disk) must not orphan its kernel. Reuse the old state table
+  -- so the kernel bridge's callbacks, which hold a reference to it, keep
+  -- routing messages to the live notebook.
+  local old_state = state_mod.get_by_facade(buf) or state_mod.unloaded[buf]
+  state_mod.unloaded[buf] = nil
+  if old_state then
+    local kernel = old_state.kernel
+    require('ipynb.edit').close(old_state)
+    state_mod.remove(buf)
+    for k in pairs(old_state) do
+      old_state[k] = nil
+    end
+    for k, v in pairs(state) do
+      old_state[k] = v
+    end
+    old_state.kernel = kernel
+    state = old_state
+  end
+
   -- Create facade buffer
   local facade = require('ipynb.facade')
   facade.create(state, buf)
@@ -344,6 +364,17 @@ function M.open_notebook(buf, path)
   -- Setup buffer-local commands
   local commands = require('ipynb.commands')
   commands.setup_buffer(state)
+end
+
+---Save the notebook shown in a facade buffer through :write
+---Writing the file directly (e.g. from a cell's edit buffer) leaves Neovim with
+---a stale mtime for the facade, so 'autoread' later sees the file as changed
+---on disk and reloads it. Going through :write keeps that bookkeeping right.
+---@param buf number Facade buffer
+function M.write_facade(buf)
+  vim.api.nvim_buf_call(buf, function()
+    vim.cmd('silent write')
+  end)
 end
 
 ---Save a notebook file

@@ -610,6 +610,13 @@ function M.execute(state, cell_idx)
     end
   end
 
+  -- The edit buffer syncs into cell.source on TextChanged(I), which may not
+  -- have fired yet (e.g. <C-CR> straight after typing), so read it directly.
+  local edit = state.edit_state
+  if edit and edit.cell_id == cell.id and vim.api.nvim_buf_is_valid(edit.buf) then
+    cell.source = table.concat(vim.api.nvim_buf_get_lines(edit.buf, 0, -1, false), "\n")
+  end
+
   require("ipynb.output").clear_outputs(state, cell_idx)
 
   cell.execution_state = "busy"

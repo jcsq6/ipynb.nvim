@@ -357,7 +357,7 @@ local function get_or_create_edit_buf(cell, lines)
       -- Use get_from_edit_buf since we're in the edit buffer, not facade
       local current_state = require('ipynb.state').get_from_edit_buf(args.buf)
       if current_state then
-        require('ipynb.io').save_notebook(current_state.facade_buf)
+        require('ipynb.io').write_facade(current_state.facade_buf)
         -- Clear modified flag on the edit buffer too
         vim.bo[args.buf].modified = false
       end

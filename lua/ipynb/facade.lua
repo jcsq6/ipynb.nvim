@@ -100,7 +100,22 @@ function M.create(state, buf)
   vim.api.nvim_create_autocmd('BufUnload', {
     buffer = buf,
     callback = function()
-      require('ipynb.state').remove(buf)
+      local state_mod = require('ipynb.state')
+      local old_state = state_mod.get_by_facade(buf)
+      state_mod.remove(buf)
+
+      -- A reload (:e!, 'autoread') unloads the buffer and then reads it again
+      -- right away; hand the kernel over to the reloaded notebook instead of
+      -- orphaning it. If nothing picks it up, the notebook was really closed.
+      if old_state and old_state.kernel then
+        state_mod.unloaded[buf] = old_state
+        vim.schedule(function()
+          if state_mod.unloaded[buf] == old_state then
+            state_mod.unloaded[buf] = nil
+            require('ipynb.kernel').shutdown(old_state)
+          end
+        end)
+      end
     end,
   })
 

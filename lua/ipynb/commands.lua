@@ -90,7 +90,7 @@ function M.setup_buffer(state)
 
   -- Save
   vim.api.nvim_buf_create_user_command(buf, 'NotebookSave', function()
-    io_mod.save_notebook(buf, nil)
+    io_mod.write_facade(buf)
   end, { desc = 'Save notebook' })
 
   -- Cell insertion
