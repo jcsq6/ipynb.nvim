@@ -63,9 +63,9 @@ end
 
 ---Apply line offset translation to params (position and range)
 ---@param params table LSP params (modified in place, should be a copy)
----@param line_offset number Offset to add to line numbers
+---@param line_offset number Offset to add to line numbers (negative to translate back)
 function M.apply_line_offset(params, line_offset)
-  if line_offset <= 0 then
+  if line_offset == 0 then
     return
   end
   if params.position then

@@ -614,6 +614,156 @@ h.run_test('document_highlight_facade_handler', function()
   h.assert_eq(seen_bufnr, state.facade_buf, 'DocumentHighlight should target facade buffer')
 end)
 
+-- Helper: run fn and wait for it to open a new floating window.
+-- Returns the float's first lines, or nil if none opened.
+local function wait_for_new_float(fn)
+  local before = {}
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    before[win] = true
+  end
+  fn()
+  local float_win = nil
+  vim.wait(5000, function()
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if not before[win] and vim.api.nvim_win_get_config(win).relative ~= '' then
+        float_win = win
+        return true
+      end
+    end
+    return false
+  end, 50)
+  if not float_win then
+    return nil
+  end
+  local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(float_win), 0, -1, false)
+  vim.api.nvim_win_close(float_win, true)
+  return table.concat(lines, '\n')
+end
+
+--------------------------------------------------------------------------------
+-- Test: vim.lsp.buf.signature_help() from edit buffer (insert-mode <C-S>)
+-- The handler discards results whose context doesn't match the current buffer
+-- and cursor, so the context must describe the edit buffer.
+--------------------------------------------------------------------------------
+h.run_test('signature_help_from_edit', function()
+  h.open_notebook('lsp_test.ipynb')
+  h.assert_true(wait_for_lsp(), 'LSP should attach')
+
+  -- Cell 2: "result = hello()" - cursor inside the call parens
+  h.enter_cell(2)
+  vim.api.nvim_win_set_cursor(0, { 1, 15 })
+
+  local contents = wait_for_new_float(function()
+    vim.lsp.buf.signature_help()
+  end)
+
+  h.exit_cell()
+
+  h.assert_true(contents ~= nil, 'Signature help float should open from edit buffer')
+  h.assert_true(contents:find("'Hello'", 1, true) ~= nil, 'Signature help should show hello() -> Literal[\'Hello\']: ' .. tostring(contents))
+end)
+
+--------------------------------------------------------------------------------
+-- Test: vim.lsp.buf.hover() from edit buffer
+--------------------------------------------------------------------------------
+h.run_test('hover_float_from_edit', function()
+  h.open_notebook('lsp_test.ipynb')
+  h.assert_true(wait_for_lsp(), 'LSP should attach')
+
+  -- Cell 2: "result = hello()" - cursor on "hello"
+  h.enter_cell(2)
+  local edit_buf = h.get_edit_buf()
+  vim.api.nvim_win_set_cursor(0, { 1, 10 })
+
+  local contents = wait_for_new_float(function()
+    vim.lsp.buf.hover()
+  end)
+
+  -- Hover range highlight should land on the edit buffer's line, not the facade's
+  local ns = vim.api.nvim_get_namespaces()['nvim.lsp.hover_range']
+  local marks = ns and vim.api.nvim_buf_get_extmarks(edit_buf, ns, 0, -1, {}) or {}
+
+  h.exit_cell()
+
+  h.assert_true(contents ~= nil, 'Hover float should open from edit buffer')
+  h.assert_true(contents:find('hello', 1, true) ~= nil, 'Hover should describe hello: ' .. tostring(contents))
+  if ns and #marks > 0 then
+    h.assert_eq(marks[1][2], 0, 'Hover range should be translated to edit buffer line')
+  end
+end)
+
+--------------------------------------------------------------------------------
+-- Test: vim.lsp.buf.hover() from facade after the shadow buffer changed
+-- The facade has no LSP change tracking, so the context version must be the
+-- facade's rather than the shadow buffer's.
+--------------------------------------------------------------------------------
+h.run_test('hover_float_from_facade_after_edit', function()
+  h.open_notebook('lsp_test.ipynb')
+  h.assert_true(wait_for_lsp(), 'LSP should attach')
+
+  h.enter_cell(1)
+  h.append_line_to_edit('x = 1')
+  h.exit_cell()
+
+  local state = h.get_state()
+  local cells_mod = require('ipynb.cells')
+  local content_start, _ = cells_mod.get_content_range(state, 2)
+  vim.api.nvim_win_set_cursor(0, { content_start + 1, 10 })
+
+  local contents = wait_for_new_float(function()
+    vim.lsp.buf.hover()
+  end)
+
+  h.assert_true(contents ~= nil, 'Hover float should open from facade after an edit')
+end)
+
+--------------------------------------------------------------------------------
+-- Test: vim.lsp.buf.document_highlight() from edit buffer highlights the edit
+-- buffer (cell-relative lines only) and clear_references() removes them.
+--------------------------------------------------------------------------------
+h.run_test('document_highlight_from_edit', function()
+  h.open_notebook('lsp_test.ipynb')
+  h.assert_true(wait_for_lsp(), 'LSP should attach')
+
+  local state = h.get_state()
+  if not lsp_supports_method(state, 'textDocument/documentHighlight') then
+    print('  SKIP: documentHighlight not supported by LSP')
+    return
+  end
+
+  local function reference_marks(buf)
+    local found = {}
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, -1, 0, -1, { type = 'highlight', details = true })) do
+      if (mark[4].hl_group or ''):match('^LspReference') then
+        table.insert(found, mark)
+      end
+    end
+    return found
+  end
+
+  -- Cell 2: "result = hello()" - "hello" is also defined in cell 1
+  h.enter_cell(2)
+  local edit_buf = h.get_edit_buf()
+  vim.api.nvim_win_set_cursor(0, { 1, 10 })
+
+  vim.lsp.buf.document_highlight()
+  vim.wait(5000, function() return #reference_marks(edit_buf) > 0 end, 50)
+
+  local edit_marks = reference_marks(edit_buf)
+  local facade_marks = reference_marks(state.facade_buf)
+
+  vim.lsp.buf.clear_references()
+  local remaining = #reference_marks(edit_buf) + #reference_marks(state.facade_buf)
+
+  h.exit_cell()
+
+  h.assert_eq(#edit_marks, 1, 'Only the reference inside the cell should be highlighted')
+  h.assert_eq(edit_marks[1][2], 0, 'Highlight should be on the edit buffer line')
+  h.assert_eq(edit_marks[1][3], 9, 'Highlight should start at "hello"')
+  h.assert_eq(#facade_marks, 0, 'Facade should not get highlights for an edit buffer request')
+  h.assert_eq(remaining, 0, 'clear_references should remove the highlights')
+end)
+
 --------------------------------------------------------------------------------
 -- Test: Inlay hint handler uses facade buffer
 --------------------------------------------------------------------------------

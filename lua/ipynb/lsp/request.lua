@@ -15,6 +15,89 @@ local function preserve_shadow_handler_context(method)
   return method == 'textDocument/diagnostic' or method == 'workspace/diagnostic'
 end
 
+-- Handlers for these methods display the result in ctx.bufnr around the cursor, so
+-- they get the requesting buffer's context (and positions) instead of the facade's.
+-- hover and signatureHelp also drop the result as stale unless ctx.bufnr is current,
+-- its buf_versions entry equals ctx.version, and the cursor is at
+-- ctx.params.position (see ctx_is_valid in vim/lsp/buf.lua).
+local requester_context_methods = {
+  ['textDocument/hover'] = true,
+  ['textDocument/signatureHelp'] = true,
+  ['textDocument/documentHighlight'] = true,
+}
+
+---Build the handler context passed back to the caller's handler
+---@param hctx table Context from the shadow buffer request
+---@param state NotebookState
+---@param ctx BufferContext Context of the requesting buffer
+---@param bufnr number Requesting buffer
+---@param version number buf_versions of the requesting buffer when the request was made
+---@param method string
+---@return table
+local function make_handler_ctx(hctx, state, ctx, bufnr, version, method)
+  hctx = vim.deepcopy(hctx)
+  if ctx.is_shadow_buf or not requester_context_methods[method] then
+    hctx.bufnr = state.facade_buf
+    return hctx
+  end
+  hctx.bufnr = bufnr
+  hctx.version = version
+  if ctx.is_edit_buf and hctx.params then
+    util.apply_line_offset(hctx.params, -ctx.line_offset)
+  end
+  return hctx
+end
+
+---Translate result positions that handlers apply to the requesting edit buffer
+---@param result any
+---@param ctx BufferContext
+---@param bufnr number Requesting buffer
+---@param method string
+---@return any
+local function translate_result(result, ctx, bufnr, method)
+  if not (ctx.is_edit_buf and requester_context_methods[method] and type(result) == 'table') then
+    return result
+  end
+
+  if method == 'textDocument/documentHighlight' then
+    -- Keep only the highlights inside the cell being edited
+    local line_count = vim.api.nvim_buf_line_count(bufnr)
+    local translated = {}
+    for _, highlight in ipairs(result) do
+      highlight = vim.deepcopy(highlight)
+      util.apply_line_offset(highlight, -ctx.line_offset)
+      if highlight.range.start.line >= 0 and highlight.range['end'].line < line_count then
+        table.insert(translated, highlight)
+      end
+    end
+    return translated
+  end
+
+  if result.range then
+    result = vim.deepcopy(result)
+    util.apply_line_offset(result, -ctx.line_offset)
+  end
+  return result
+end
+
+---Wrap a response handler to rewrite URIs, positions, and context for the requesting buffer
+---@param orig_handler function
+---@param state NotebookState
+---@param ctx BufferContext
+---@param bufnr number Requesting buffer
+---@param method string
+---@return function
+local function wrap_handler(orig_handler, state, ctx, bufnr, method)
+  local version = vim.lsp.util.buf_versions[bufnr]
+  return function(err, result, hctx, config)
+    result = translate_result(uri_mod.rewrite_result_uris(result, state, method), ctx, bufnr, method)
+    if hctx and not preserve_shadow_handler_context(method) then
+      hctx = make_handler_ctx(hctx, state, ctx, bufnr, version, method)
+    end
+    return orig_handler(err, result, hctx, config)
+  end
+end
+
 ---Register an interceptor for a specific LSP method
 ---Handler signature: handler(ctx, method, params, orig_handler, client, req_bufnr) -> handled, req_id
 ---@param method string LSP method name (e.g., 'textDocument/formatting')
@@ -96,14 +179,7 @@ local function wrap_client(client, shadow_buf)
       -- When handler is nil, vim.lsp uses the global handler - we need to wrap that too
       local orig_handler = handler or vim.lsp.handlers[method]
       if orig_handler then
-        handler = function(err, result, hctx, config)
-          result = uri_mod.rewrite_result_uris(result, state, method)
-          if hctx and not preserve_shadow_handler_context(method) then
-            hctx = vim.deepcopy(hctx)
-            hctx.bufnr = state.facade_buf
-          end
-          return orig_handler(err, result, hctx, config)
-        end
+        handler = wrap_handler(orig_handler, state, ctx, bufnr, method)
       end
 
       -- Make request to shadow buffer
@@ -209,14 +285,7 @@ function M.install()
       -- When handler is nil, vim.lsp uses the global handler - we need to wrap that too
       local orig_handler = handler or vim.lsp.handlers[method]
       if orig_handler then
-        handler = function(err, result, hctx, config)
-          result = uri_mod.rewrite_result_uris(result, state, method)
-          if hctx and not preserve_shadow_handler_context(method) then
-            hctx = vim.deepcopy(hctx)
-            hctx.bufnr = state.facade_buf
-          end
-          return orig_handler(err, result, hctx, config)
-        end
+        handler = wrap_handler(orig_handler, state, ctx, bufnr, method)
       end
 
       local target_buf = ctx.is_shadow_buf and bufnr or state.shadow_buf
@@ -240,15 +309,15 @@ function M.install()
       -- When handler is nil, vim.lsp uses the global handler - we need to wrap that too
       local orig_handler = handler or vim.lsp.handlers[method]
       if orig_handler then
+        local version = vim.lsp.util.buf_versions[bufnr]
         handler = function(results, hctx, config)
           for _, resp in pairs(results) do
             if resp.result then
-              resp.result = uri_mod.rewrite_result_uris(resp.result, state, method)
+              resp.result = translate_result(uri_mod.rewrite_result_uris(resp.result, state, method), ctx, bufnr, method)
             end
           end
           if hctx and not preserve_shadow_handler_context(method) then
-            hctx = vim.deepcopy(hctx)
-            hctx.bufnr = state.facade_buf
+            hctx = make_handler_ctx(hctx, state, ctx, bufnr, version, method)
           end
           return orig_handler(results, hctx, config)
         end

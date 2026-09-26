@@ -621,6 +621,14 @@ These wrappers rewrite params to the shadow buffer and rewrite result URIs back 
 Edit buffer requests are line-offset by `edit_state.start_line` so positions map to the
 correct lines in the shadow buffer. Facade requests stay 1:1.
 
+The handler context's `bufnr` is rewritten to the facade, except for methods whose
+handlers display the result around the cursor (`hover`, `signatureHelp`,
+`documentHighlight`). Those get the requesting buffer's context: its `bufnr`, its
+`buf_versions` entry as `version`, and `params` translated back to its lines. Result
+ranges are translated too, and document highlights outside the edited cell are dropped.
+`vim.lsp.buf.hover()`/`signature_help()` discard any response whose context doesn't
+match the current buffer, version, and cursor.
+
 **Diagnostics Display (filter markdown lines):**
 
 ```lua
