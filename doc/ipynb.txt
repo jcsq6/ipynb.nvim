@@ -30,7 +30,7 @@ Features:
 - Cell folding to collapse cell content
 - Tree-sitter based syntax highlighting
 
-Open any .ipynb file and use `i` to enter Cell mode, `]]`/`[[` to navigate.
+Open any .ipynb file and use `i` to insert in a cell, `]]`/`[[` to navigate.
 
 ==============================================================================
 SETUP                                                             *ipynb-setup*
@@ -370,13 +370,15 @@ Notebook mode only (entering Cell mode, cell operations): ~
 
     These work only in Notebook mode.
 
-    `<CR>`       [N]   Enter cell in Normal mode
+    `<CR>`       [N]   Enter cell in Normal mode (stay until `<Esc>`)
     `i`          [N]   Enter cell in Insert mode (insert)
     `a`          [N]   Enter cell in Insert mode (append)
     `I`          [N]   Enter cell in Insert mode (insert at line start)
     `A`          [N]   Enter cell in Insert mode (append at line end)
     `o`          [N]   Enter cell in Insert mode (open line below)
     `O`          [N]   Enter cell in Insert mode (open line above)
+                       After i, a, I, A, o, O, leaving Insert mode
+                       returns to Notebook mode.
     `dd`         [N]   Cut cell
     `p`          [N]   Paste cell below
     `P`          [N]   Paste cell above

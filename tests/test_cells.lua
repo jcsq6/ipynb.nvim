@@ -375,6 +375,36 @@ h.run_test('mixed_cell_type_boundaries', function()
 end)
 
 --------------------------------------------------------------------------------
+-- Test: Leaving Insert mode returns to the notebook
+-- A cell entered with i/a/o/... should not keep you in the edit float (where
+-- G, gg and / only see the cell) once you're done inserting. <CR> enters the
+-- cell to stay in it.
+--------------------------------------------------------------------------------
+h.run_test('insert_then_esc_returns_to_notebook', function()
+  local state = h.open_notebook('three_cells.ipynb')
+  local facade_win = vim.api.nvim_get_current_win()
+  local start = require('ipynb.cells').get_cell_range(state, 2)
+  vim.api.nvim_win_set_cursor(0, { start + 3, 2 }) -- "b = 2", on "="
+
+  h.feedkeys('ixy<Esc>')
+  vim.wait(200, function() return state.edit_state == nil end, 10)
+
+  h.assert_true(state.edit_state == nil, 'Leaving Insert mode should leave Cell mode')
+  h.assert_eq(vim.api.nvim_get_current_win(), facade_win, 'Focus should return to the notebook')
+  h.assert_eq(state.cells[2].source, '# Cell 2\nb xy= 2')
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  h.assert_eq(cursor[1], start + 3, 'Cursor should stay on the edited line')
+  h.assert_eq(cursor[2], 3, 'Cursor should be on the last inserted character')
+
+  h.feedkeys('<CR>')
+  vim.wait(100, function() return state.edit_state ~= nil end, 10)
+  h.feedkeys('iz<Esc>')
+  vim.wait(100)
+  h.assert_true(state.edit_state ~= nil, 'A cell entered with <CR> should stay open after Insert mode')
+  h.exit_cell()
+end)
+
+--------------------------------------------------------------------------------
 -- Print summary and exit
 --------------------------------------------------------------------------------
 local success = h.summary()

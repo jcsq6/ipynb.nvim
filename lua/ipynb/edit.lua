@@ -485,6 +485,9 @@ function M.open(state, mode)
     start_line = content_start,
     end_line = content_end,
     last_changedtick = vim.api.nvim_buf_get_changedtick(buf),  -- Track for spurious TextChangedI detection
+    -- Entered to insert (i, a, o, ...): leaving Insert mode returns to the
+    -- notebook, where normal-mode commands work too. <CR> stays in the cell.
+    leave_after_insert = mode ~= nil,
   }
   refresh_edit_window(state)
 
@@ -703,6 +706,30 @@ function M.setup_sync(state, buf)
     end,
   })
 
+  -- Back to the notebook once Insert mode ends, if the cell was entered to
+  -- insert. ModeChanged rather than InsertLeave: that also fires for i_CTRL-O
+  -- (which stays in the cell) and not for i_CTRL-C (which should leave it).
+  vim.api.nvim_create_autocmd('ModeChanged', {
+    group = group,
+    buffer = buf,
+    callback = function()
+      local edit = state.edit_state
+      if not edit or edit.buf ~= buf or not edit.leave_after_insert then
+        return
+      end
+      if not vim.v.event.old_mode:match('^[iR]') or vim.v.event.new_mode ~= 'n' then
+        return
+      end
+      -- Deferred so the cursor has stepped back off the inserted text and the
+      -- InsertLeave sync above has run
+      vim.schedule(function()
+        if state.edit_state == edit and vim.fn.mode(1) == 'n' and vim.api.nvim_get_current_win() == edit.win then
+          M.leave(state)
+        end
+      end)
+    end,
+  })
+
   -- Also sync facade on TextChanged (normal mode changes like dd, p, etc.)
   vim.api.nvim_create_autocmd('TextChanged', {
     group = group,
@@ -875,7 +902,7 @@ function M.setup_edit_keymaps(state)
 
   -- Exit edit mode (Esc only, q reserved for macros)
   vim.keymap.set('n', '<Esc>', function()
-    M.close(state)
+    M.leave(state)
   end, vim.tbl_extend('force', opts, { desc = 'Close edit float' }))
 
   -- Navigate to adjacent cells
@@ -1244,6 +1271,25 @@ function M.close(state)
       break
     end
   end
+end
+
+---Close the edit float, leaving the notebook cursor where the cell's was
+---@param state NotebookState
+function M.leave(state)
+  local edit = state.edit_state
+  if not edit then
+    return
+  end
+  -- Flush a change no TextChanged(I) has synced yet (e.g. Insert mode left
+  -- with the completion menu open); a no-op when the facade is up to date
+  if vim.api.nvim_buf_is_valid(edit.buf) then
+    vim.api.nvim_exec_autocmds('TextChanged', { buffer = edit.buf, modeline = false })
+  end
+  if vim.api.nvim_win_is_valid(edit.win) and vim.api.nvim_win_is_valid(edit.parent_win) then
+    local cursor = vim.api.nvim_win_get_cursor(edit.win)
+    pcall(vim.api.nvim_win_set_cursor, edit.parent_win, { edit.start_line + cursor[1], cursor[2] })
+  end
+  M.close(state)
 end
 
 ---Edit adjacent cell (next or previous)

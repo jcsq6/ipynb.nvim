@@ -84,8 +84,8 @@ The treesitter parser is automatically compiled on first load.
 ### 2. Edit a cell
 
 - Place your cursor anywhere on a cell (you can quickly navigate using `]]` (next) and `[[` (previous), though any vim motions will work)
-- Press `i` (Insert) or `<CR>` (Normal) to enter Cell mode for the current cell
-- Press `<Esc>` to exit Cell mode and return to Notebook mode
+- Press `i`, `a`, `o`, ... to insert in the current cell; leaving Insert mode returns to Notebook mode
+- Press `<CR>` to enter Cell mode for the current cell in Normal mode (motions like `G` and `/` then stay within the cell); press `<Esc>` to return to Notebook mode
 - Normal-mode edits also work directly in Notebook mode: `dd`, `x`, `p`, `cw`, `.` and friends change the cell under the cursor (on a cell's border, `dd`/`p`/`P` cut and paste whole cells instead). Edits that would break a cell's boundaries are undone.
 - Scrolling in Cell mode (`<C-e>`, `<C-d>`, `zz`, the mouse wheel, ...) scrolls the notebook; scrolling the cell out of view returns to Notebook mode
 
@@ -263,7 +263,8 @@ require("ipynb").setup({
     variable_inspect = "<leader>kh", -- inspect variable at cursor
     cell_variables = "<leader>kv",   -- show all variables in cell
     toggle_auto_hover = "<leader>kH", -- toggle auto-hover on CursorHold
-    -- Note: i, a, I, A, o, O, <CR> enter Cell mode; <Esc> exits Cell mode
+    -- Note: i, a, I, A, o, O insert in the cell and return to Notebook mode on leaving Insert mode
+    -- Note: <CR> enters Cell mode; <Esc> exits Cell mode
     -- Note: u, <C-r> perform global undo/redo across cells in both Notebook mode and Cell mode
     -- Note: <C-j>/<C-k> navigate cells while in Cell mode
     -- Note: LSP commands (go to definition, references, hover, etc.) are proxied
