@@ -105,5 +105,35 @@ h.run_test('reload_keeps_kernel', function()
   vim.fn.delete(path)
 end)
 
+--------------------------------------------------------------------------------
+-- Test: a cell edited before a reload still syncs and leaves afterwards
+-- The reload reuses the cell's hidden edit buffer, whose sync autocmds and
+-- keymaps were bound once to the notebook state from before the reload: edits
+-- never reached the notebook and <Esc> couldn't leave the cell.
+--------------------------------------------------------------------------------
+h.run_test('reload_rebinds_reused_cell_buffer', function()
+  local path = temp_notebook()
+  h.open_notebook_path(path)
+  -- Persist the generated cell IDs so the reload finds the same cells
+  vim.cmd('silent write')
+  h.enter_cell(1)
+  local edit_buf = h.get_edit_buf()
+  h.exit_cell()
+
+  vim.cmd('edit!')
+  vim.wait(50)
+
+  local state = h.get_state()
+  h.enter_cell(1)
+  h.assert_eq(h.get_edit_buf(), edit_buf, 'Reload should reuse the cell edit buffer')
+  h.set_edit_content('y = 2')
+  vim.api.nvim_exec_autocmds('TextChanged', { buffer = edit_buf })
+  h.assert_eq(state.cells[1].source, 'y = 2')
+
+  h.feedkeys('<Esc>')
+  h.assert_true(state.edit_state == nil, '<Esc> should leave the cell')
+  vim.fn.delete(path)
+end)
+
 local success = h.summary()
 vim.cmd(success and 'qa!' or 'cq!')

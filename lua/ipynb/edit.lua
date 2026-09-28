@@ -351,6 +351,12 @@ local function get_or_create_edit_buf(cell, lines)
       replace_buf_lines(existing, lines)
     end
     set_edit_buffer_identity(existing, state and state.source_path, cell.id)
+    -- Its sync autocmds and keymaps were bound to the notebook state from
+    -- before the reload, which a reload without a kernel replaces: have open()
+    -- bind them to the current one.
+    vim.b[existing].notebook_sync_attached = nil
+    vim.b[existing].notebook_keymaps_set = nil
+    vim.b[existing].notebook_lsp_attach_fired = nil
     cell.edit_buf = existing
     return existing
   end
