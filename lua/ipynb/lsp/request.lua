@@ -152,6 +152,21 @@ local function wrap_client(client, shadow_buf)
     return orig_supports_method(client, method, bufnr)
   end
 
+  -- Wrap client.notify to drop didClose for facade/edit buffers. They borrow
+  -- this client from the shadow buffer, so it never sent didOpen for them, but
+  -- when one unloads while another client is really attached to it (e.g.
+  -- render-markdown's in-process LSP), Neovim detaches every client
+  -- get_clients reports for it, this one included. Servers like ty error on a
+  -- didClose for a document that was never opened.
+  local orig_notify = client.notify
+  client.notify = function(self, method, params, bufnr)
+    if method == 'textDocument/didClose' and bufnr and vim.api.nvim_buf_is_valid(bufnr)
+      and (vim.b[bufnr].notebook_facade or vim.b[bufnr].ipynb_is_edit_buffer) then
+      return true
+    end
+    return orig_notify(self, method, params, bufnr)
+  end
+
   -- Wrap client.request to intercept LSP requests
   local orig_request = client.request
   client.request = function(self, method, params, handler, req_bufnr)

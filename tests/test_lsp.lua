@@ -1088,6 +1088,65 @@ h.run_test('format_cell_from_edit_float', function()
 end)
 
 --------------------------------------------------------------------------------
+-- Test: reloading doesn't send didClose for the notebook to shadow clients
+-- With another client really attached to the facade (render-markdown's
+-- in-process LSP does this), unloading the facade detaches every client
+-- get_clients reports for it, which includes the shadow's clients. They never
+-- opened the .ipynb, and ty errors on a didClose for it.
+--------------------------------------------------------------------------------
+h.run_test('reload_sends_no_notebook_didclose_to_shadow_clients', function()
+  h.open_notebook('lsp_test.ipynb')
+  h.assert_true(wait_for_lsp(), 'LSP should attach')
+  local state = h.get_state()
+  local facade_buf = state.facade_buf
+
+  -- A client of the facade's own, like render-markdown's
+  local server = function(dispatchers)
+    local closing = false
+    return {
+      request = function(method, _, callback)
+        if method == 'initialize' then
+          callback(nil, { capabilities = {} })
+        elseif method == 'shutdown' then
+          callback(nil, nil)
+        end
+        return true, 1
+      end,
+      notify = function(method)
+        if method == 'exit' then
+          dispatchers.on_exit(0, 15)
+        end
+        return true
+      end,
+      is_closing = function() return closing end,
+      terminate = function() closing = true end,
+    }
+  end
+  local own_id = vim.lsp.start({ name = 'facade-own', cmd = server }, { bufnr = facade_buf })
+  h.assert_true(own_id ~= nil, 'Facade client should start')
+
+  local closed = {}
+  for _, client in ipairs(vim.lsp.get_clients({ bufnr = state.shadow_buf })) do
+    local rpc_notify = client.rpc.notify
+    client.rpc.notify = function(method, params)
+      if method == 'textDocument/didClose' then
+        table.insert(closed, vim.uri_to_fname(params.textDocument.uri))
+      end
+      return rpc_notify(method, params)
+    end
+  end
+
+  vim.cmd('edit!')
+  vim.wait(200)
+
+  for _, path in ipairs(closed) do
+    h.assert_true(not path:match('%.ipynb$'), 'Shadow clients never opened ' .. path)
+  end
+  h.assert_true(#closed > 0, 'Shadow clients should close the old shadow file')
+  vim.lsp.stop_client(own_id, true)
+end)
+
+--------------------------------------------------------------------------------
 -- Print summary and exit
 --------------------------------------------------------------------------------
 local success = h.summary()
