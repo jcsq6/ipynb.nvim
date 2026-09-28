@@ -59,6 +59,9 @@ local M = {}
 ---@field images table|nil Image objects indexed by cell.id (string)
 ---@field skip_sync boolean|nil Temporarily skip sync during undo/redo
 ---@field _output_max_lines number|nil Output row cap the outputs were last rendered with
+---@field disk_mtime string|nil mtime of the file when last read or saved
+---@field disk_hash string|nil sha256 of the file when last read or saved
+---@field disk_warned_hash string|nil Change on disk already warned about
 
 -- Store all notebook states, keyed by facade buffer
 ---@type table<number, NotebookState>

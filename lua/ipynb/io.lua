@@ -386,6 +386,7 @@ function M.open_notebook(buf, path)
     old_state.kernel = kernel
     state = old_state
   end
+  M.record_disk_state(state)
 
   -- Create facade buffer
   local facade = require('ipynb.facade')
@@ -422,10 +423,103 @@ end
 ---a stale mtime for the facade, so 'autoread' later sees the file as changed
 ---on disk and reloads it. Going through :write keeps that bookkeeping right.
 ---@param buf number Facade buffer
-function M.write_facade(buf)
+---@param force boolean|nil Overwrite even if the file changed on disk (:w!)
+function M.write_facade(buf, force)
   vim.api.nvim_buf_call(buf, function()
-    vim.cmd('silent write')
+    vim.cmd(force and 'silent write!' or 'silent write')
   end)
+end
+
+---@param path string
+---@return string|nil
+local function file_hash(path)
+  local fd = io.open(path, 'rb')
+  if not fd then
+    return nil
+  end
+  local data = fd:read('*a')
+  fd:close()
+  return vim.fn.sha256(data)
+end
+
+---@param stat uv.fs_stat.result
+---@return string
+local function mtime_key(stat)
+  return stat.mtime.sec .. '.' .. stat.mtime.nsec
+end
+
+---Remember the notebook file as it is on disk after reading or saving it, so
+---changes made by other programs can be told apart from our own
+---@param state NotebookState
+function M.record_disk_state(state)
+  local stat = vim.uv.fs_stat(state.source_path)
+  state.disk_mtime = stat and mtime_key(stat) or nil
+  state.disk_hash = stat and file_hash(state.source_path) or nil
+  state.disk_warned_hash = nil
+end
+
+---Whether another program changed the notebook file since it was read or saved
+---Neovim's own check for this ('autoread', the "changed since reading" prompt
+---on :w) skips acwrite buffers like the facade.
+---@param state NotebookState
+---@return boolean changed
+---@return string|nil hash Hash of the file now on disk, if changed
+function M.changed_on_disk(state)
+  local stat = vim.uv.fs_stat(state.source_path)
+  -- Not on disk (deleted, or a new notebook not saved yet): nothing to lose
+  if not stat or not state.disk_hash then
+    return false
+  end
+  local mtime = mtime_key(stat)
+  if mtime == state.disk_mtime then
+    return false
+  end
+  local hash = file_hash(state.source_path)
+  if hash == state.disk_hash then
+    -- Touched without changing (e.g. by a sync client)
+    state.disk_mtime = mtime
+    return false
+  end
+  return true, hash
+end
+
+---Reload the notebook if it changed on disk and nothing unsaved would be lost
+---(as 'autoread' does for normal buffers); otherwise warn once per change.
+---@param state NotebookState
+function M.check_disk(state)
+  local buf = state.facade_buf
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  local changed, hash = M.changed_on_disk(state)
+  if not changed then
+    return
+  end
+
+  local name = vim.fn.fnamemodify(state.source_path, ':t')
+  local autoread = vim.api.nvim_buf_call(buf, function()
+    return vim.o.autoread
+  end)
+  if autoread and not vim.bo[buf].modified and not state.edit_state then
+    -- Out of the autocmd that noticed it, so the reload's own autocmds run
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(buf) or vim.bo[buf].modified or not M.changed_on_disk(state) then
+        return
+      end
+      vim.api.nvim_buf_call(buf, function()
+        vim.cmd('edit!')
+      end)
+      vim.notify(name .. ' changed on disk; reloaded', vim.log.levels.INFO)
+    end)
+    return
+  end
+
+  if state.disk_warned_hash == hash then
+    return
+  end
+  state.disk_warned_hash = hash
+  vim.notify(name .. ' changed on disk. :e! to load it (dropping unsaved changes), or :w! to overwrite it.',
+    vim.log.levels.WARN)
 end
 
 ---Save a notebook file
@@ -439,6 +533,14 @@ function M.save_notebook(buf, path)
   end
 
   path = path or state.source_path
+  local own_file = vim.fn.fnamemodify(path, ':p') == state.source_path
+
+  if own_file and vim.v.cmdbang == 0 and M.changed_on_disk(state) then
+    vim.notify(vim.fn.fnamemodify(path, ':t')
+      .. ' changed on disk since it was read; not saved. :e! to load it, or :w! to overwrite it.',
+      vim.log.levels.ERROR)
+    return
+  end
 
   -- Sync cells from facade buffer
   local cells_mod = require('ipynb.cells')
@@ -447,6 +549,9 @@ function M.save_notebook(buf, path)
 
   -- Write to file
   M.write_ipynb(path, state.cells, state.metadata)
+  if own_file then
+    M.record_disk_state(state)
+  end
 
   -- Mark buffer as saved
   vim.bo[buf].modified = false

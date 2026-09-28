@@ -123,6 +123,26 @@ function M.setup(opts)
     end,
   })
 
+  -- Notice notebooks changed on disk by other programs, where 'autoread' would
+  -- (it skips acwrite buffers like the facade)
+  vim.api.nvim_create_autocmd({ 'FocusGained', 'BufEnter', 'CursorHold' }, {
+    group = vim.api.nvim_create_augroup('NotebookDiskCheck', { clear = true }),
+    callback = function(args)
+      local state_mod = require('ipynb.state')
+      local io_mod = require('ipynb.io')
+      if args.event == 'FocusGained' then
+        for _, state in pairs(state_mod.notebooks) do
+          io_mod.check_disk(state)
+        end
+      else
+        local state = state_mod.get_by_facade(args.buf)
+        if state then
+          io_mod.check_disk(state)
+        end
+      end
+    end,
+  })
+
   -- Setup user commands
   require('ipynb.commands').setup()
 end
